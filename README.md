@@ -20,6 +20,9 @@ Cursor's Agent API exposes models (Claude, GPT, Gemini, Grok, Composer, Kimi, in
   - Bridges Cursor's native `Read`, `Write`, `Delete`, `Shell`, `Grep`, and `Ls` calls through Pi's native tools.
   - Forwards binary image data on `Read` so vision-capable models can inspect images directly.
   - Scopes `Shell` commands to `workingDirectory` when it differs from the session `cwd`, separates error output on `stderr`, excludes `.git` from hidden ripgrep searches, and returns written file content when `returnFileContentAfterWrite` is requested.
+- **Accurate Context & Cost Tracking**
+  - Reads Cursor's checkpoint `tokenDetails` (`usedTokens` and `maxTokens`) so Pi's context bar and auto-compaction reflect the real context window and token usage instead of only output deltas.
+  - Computes API-equivalent token costs from model pricing (displayed as `$X.XXX (sub)` in Pi's footer for OAuth subscriptions).
 - **Reliable Conversation History & Session Lifecycle**
   - Uses Cursor's native KV blob cache across consecutive `cursor-agent` turns for fast prompt caching.
   - Validates blob integrity and branch alignment (`lastAssistantTimestamp`) before reusing cached state; automatically reconstructs `<prior_conversation_history>` on `/fork`, cache eviction, `/tree` navigation, `/compact`, or switching back from another provider — without losing rules, skills, or tools.

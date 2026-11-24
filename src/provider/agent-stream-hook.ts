@@ -1,4 +1,5 @@
 import type { ToolExecRequest } from "../bridge/cursor-to-pi/tool-bridge";
+import type { CursorTokenDetails } from "./usage";
 
 export type ChannelEvent =
   | { kind: "content"; data: ContentEvent }
@@ -52,6 +53,7 @@ export interface LiveSession {
   channel: LiveEventChannel;
   cursorRunPromise: Promise<void>;
   flushSessionState: (lastAssistantTimestamp?: number) => Promise<void>;
+  getLatestTokenDetails?: () => CursorTokenDetails | undefined;
   abort: (reason?: string) => void;
   startTime: number;
   firstTokenTime?: number;

@@ -63,6 +63,7 @@ import {
 } from "./agent-stream-hook";
 import { toCursorId } from "./model-mapping";
 import { type CursorStateStore, createOverlayState } from "./state";
+import { applyUsageAndCost, type CursorTokenDetails } from "./usage";
 
 function createCheckpointHandler(
   handler: (checkpoint: ConversationStateStructure) => void,
@@ -495,9 +496,20 @@ export function streamCursorAgent(
         const interactionListener = createInteractionListenerAdapter(
           handleInteractionUpdate,
         );
+        let latestTokenDetails: CursorTokenDetails | undefined;
         let pendingCheckpoint: Promise<void> = Promise.resolve();
         const checkpointHandler = createCheckpointHandler(
           (checkpoint: ConversationStateStructure) => {
+            if (
+              checkpoint.tokenDetails &&
+              (checkpoint.tokenDetails.usedTokens > 0 ||
+                checkpoint.tokenDetails.maxTokens > 0)
+            ) {
+              latestTokenDetails = {
+                usedTokens: checkpoint.tokenDetails.usedTokens,
+                maxTokens: checkpoint.tokenDetails.maxTokens,
+              };
+            }
             pendingCheckpoint = pendingCheckpoint
               .then(() => agentStore.handleCheckpoint(null, checkpoint))
               .catch(() => {});
@@ -534,6 +546,7 @@ export function streamCursorAgent(
           channel,
           cursorRunPromise,
           flushSessionState,
+          getLatestTokenDetails: () => latestTokenDetails,
           abort: (reason) => {
             sessionAbortController.abort(
               reason ? new Error(reason) : new Error("Session ended"),
@@ -573,17 +586,22 @@ export function streamCursorAgent(
       if (liveSession.firstTokenTime) {
         output.ttft = liveSession.firstTokenTime - liveSession.startTime;
       }
-      output.usage.cost = {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
+      const syncModelUsage = () => {
+        const tokenDetails = liveSession.getLatestTokenDetails?.();
+        if (
+          tokenDetails &&
+          tokenDetails.maxTokens > 0 &&
+          model.contextWindow !== tokenDetails.maxTokens
+        ) {
+          model.contextWindow = tokenDetails.maxTokens;
+        }
+        applyUsageAndCost(output.usage, model, tokenDetails);
       };
 
       if (result.reason === "toolUse" && result.tools.length > 0) {
         emitToolCalls(result.tools, output, stream, state);
         output.stopReason = "toolUse";
+        syncModelUsage();
 
         state.rememberAssistantContent({
           timestamp: output.timestamp,
@@ -612,6 +630,7 @@ export function streamCursorAgent(
           await session.flushSessionState(output.timestamp);
           flushed = true;
         } catch {}
+        syncModelUsage();
         await evictAgentStore(sessionId, { persist: !flushed }).catch(() => {});
         stream.push({ type: "done", reason: "stop", message: output });
       }
