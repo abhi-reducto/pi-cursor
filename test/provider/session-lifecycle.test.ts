@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import type { SessionEntry } from "@mariozechner/pi-coding-agent";
 import {
   requestToolExecution,
   resolveToolResult,
@@ -12,6 +13,10 @@ import {
   hasAgentStore,
   retainOnlyAgentStore,
 } from "../../src/lib/agent-store/index.js";
+import {
+  CURSOR_STATE_ENTRY_TYPE,
+  findLatestValidSnapshot,
+} from "../../src/provider/agent-store.js";
 import {
   getLiveSession,
   LiveEventChannel,
@@ -145,4 +150,92 @@ test("retainOnlyActiveSessionMemory keeps the active session and rejects others"
   await assert.doesNotReject(keepPending);
 
   retainOnlyActiveSessionMemory(null, "Session ended");
+});
+
+test("findLatestValidSnapshot stops at compaction entries so pre-compaction state is never restored", () => {
+  const preCompactSnapshot = {
+    type: "custom",
+    id: "1",
+    parentId: null,
+    timestamp: "2026-01-01T00:00:00Z",
+    customType: CURSOR_STATE_ENTRY_TYPE,
+    data: {
+      version: 1,
+      agentId: "old-agent",
+      latestRootBlobId: "abcd",
+      lastAssistantTimestamp: 100,
+    },
+  };
+  const compactionEntry = {
+    type: "compaction",
+    id: "2",
+    parentId: "1",
+    timestamp: "2026-01-01T00:01:00Z",
+    summary: "Compacted",
+    firstKeptEntryId: "2",
+    tokensBefore: 150000,
+  };
+  const postCompactSnapshot = {
+    type: "custom",
+    id: "3",
+    parentId: "2",
+    timestamp: "2026-01-01T00:02:00Z",
+    customType: CURSOR_STATE_ENTRY_TYPE,
+    data: {
+      version: 1,
+      agentId: "new-agent",
+      latestRootBlobId: "ef01",
+      lastAssistantTimestamp: 200,
+    },
+  };
+
+  assert.equal(
+    findLatestValidSnapshot([
+      preCompactSnapshot,
+      compactionEntry,
+    ] as unknown as SessionEntry[]),
+    null,
+  );
+  assert.equal(
+    findLatestValidSnapshot([
+      preCompactSnapshot,
+      compactionEntry,
+      postCompactSnapshot,
+    ] as unknown as SessionEntry[])?.agentId,
+    "new-agent",
+  );
+});
+
+test("terminateSession with persist: false and resetStore: true skips flush and clears live session", async () => {
+  let flushed = 0;
+  let aborted = false;
+  let resolveRun!: () => void;
+  const cursorRunPromise = new Promise<void>((resolve) => {
+    resolveRun = resolve;
+  });
+
+  setLiveSession("session-compact", {
+    channel: new LiveEventChannel("session-compact"),
+    cursorRunPromise,
+    flushSessionState: async () => {
+      flushed += 1;
+    },
+    abort: () => {
+      aborted = true;
+      resolveRun();
+    },
+    startTime: Date.now(),
+  });
+
+  await terminateSession("session-compact", "Session compacted", {
+    persist: false,
+    resetStore: true,
+  });
+
+  assert.equal(aborted, true);
+  assert.equal(flushed, 0);
+  assert.equal(getLiveSession("session-compact"), undefined);
+  assert.equal(hasAgentStore("session-compact"), true);
+
+  retainOnlyActiveSessionMemory(null, "cleanup");
 });

@@ -10,6 +10,7 @@ import {
   ShellResult as ShellResultClass,
   ShellSuccess,
 } from "../../../__generated__/agent/v1/shell_exec_pb";
+import { isDangerousShellCommand } from "../../../provider/approval";
 import type { Executor } from "../../../vendor/agent-exec";
 import { toolResultToText } from "../../shared/tool-result";
 import {
@@ -85,16 +86,6 @@ export function buildShellRejectedResult(
   });
 }
 
-function isDangerousShellCommand(command: string): boolean {
-  const c = command.toLowerCase();
-  if (/(^|\s)sudo\b/.test(c)) return true;
-  if (/\brm\b.*\s-rf\b/.test(c)) return true;
-  if (/\bmkfs\b|\bdd\b|\bshutdown\b|\breboot\b/.test(c)) return true;
-  if (/\bcurl\b.*\|\s*(sh|bash)\b/.test(c)) return true;
-  if (/\bwget\b.*\|\s*(sh|bash)\b/.test(c)) return true;
-  return false;
-}
-
 export async function confirmIfDangerous(
   getCtx: () => ExtensionContext | null,
   command: string,
@@ -124,7 +115,13 @@ export class LocalShellExecutor implements Executor<ShellArgs, ShellResult> {
       );
     }
 
-    const approved = await confirmIfDangerous(this.ctx.getCtx, args.command);
+    const approved = this.ctx.requestApproval
+      ? await this.ctx.requestApproval({
+          kind: "shell",
+          command: args.command,
+          workingDirectory,
+        })
+      : await confirmIfDangerous(this.ctx.getCtx, args.command);
     if (!approved) {
       return buildShellRejectedResult(
         args.command,

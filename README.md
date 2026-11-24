@@ -20,13 +20,16 @@ Cursor's Agent API exposes models (Claude, GPT, Gemini, Grok, Composer, Kimi, in
   - Bridges Cursor's native `Read`, `Write`, `Delete`, `Shell`, `Grep`, and `Ls` calls through Pi's native tools.
   - Forwards binary image data on `Read` so vision-capable models can inspect images directly.
   - Scopes `Shell` commands to `workingDirectory` when it differs from the session `cwd`, separates error output on `stderr`, excludes `.git` from hidden ripgrep searches, and returns written file content when `returnFileContentAfterWrite` is requested.
+- **Configurable Command & Tool Approval Modes**
+  - Switch between `dangerous` (default — prompt only on destructive shell commands), `auto` (run everything without prompts, including headless), and `ask` (prompt before every shell, write, delete, and custom/MCP tool call).
+  - Change modes on the fly via `/cursor-approval`, `Ctrl+Alt+A`, `--cursor-approval <mode>`, or `PI_CURSOR_APPROVAL=<mode>`; active mode persists per session and displays a status badge (`cursor:safe`, `cursor:auto`, `cursor:ask`) in Pi's footer.
 - **Accurate Context & Cost Tracking**
   - Reads Cursor's checkpoint `tokenDetails` (`usedTokens` and `maxTokens`) so Pi's context bar and auto-compaction reflect the real context window and token usage instead of only output deltas.
   - Computes API-equivalent token costs from model pricing (displayed as `$X.XXX (sub)` in Pi's footer for OAuth subscriptions).
 - **Reliable Conversation History & Session Lifecycle**
   - Uses Cursor's native KV blob cache across consecutive `cursor-agent` turns for fast prompt caching.
   - Validates blob integrity and branch alignment (`lastAssistantTimestamp`) before reusing cached state; automatically reconstructs `<prior_conversation_history>` on `/fork`, cache eviction, `/tree` navigation, `/compact`, or switching back from another provider — without losing rules, skills, or tools.
-  - Re-syncs branch state cleanly after `/reload` and surfaces API errors instead of silently terminating streams.
+  - Resets live Cursor streams cleanly on `session_compact` so auto-compaction never reuses stale pre-compaction context, keeps ephemeral calls (like compaction summarization) isolated from session state, re-syncs branch state cleanly after `/reload`, and surfaces API errors instead of silently terminating streams.
 
 ## Installation
 
@@ -59,6 +62,32 @@ Alternatively, set `CURSOR_ACCESS_TOKEN` in your environment.
 ## Models
 
 Models available to your Cursor account are fetched and cached automatically on login and selection. Canonical model IDs map thinking levels (`minimal`, `low`, `medium`, `high`, `xhigh`) to the corresponding Cursor reasoning variants automatically, while unmapped Cursor model IDs pass through as-is.
+
+## Approval Modes
+
+Control whether `pi-cursor` prompts for confirmation before running tools:
+
+| Mode | Aliases | Behavior | Footer Badge |
+|---|---|---|---|
+| `dangerous` *(default)* | `safe`, `default` | Auto-approves normal tools; prompts before destructive shell commands (`sudo`, `rm -rf`/`-fr`, `mkfs`, `dd`, `shutdown`, `reboot`, `curl\|sh`, `wget\|bash`). Denies dangerous commands when running headless without a UI. | `cursor:safe` |
+| `auto` | `yolo`, `all`, `off`, `none` | Runs **everything** without confirmation prompts — including dangerous shell commands, writes, deletes, and custom/MCP tools — in both interactive TUI and headless mode. | `cursor:auto` |
+| `ask` | `strict`, `prompt`, `confirm` | Prompts before every shell command, file write, file delete, and custom/MCP tool call (read-only `read`/`grep`/`ls` remain auto-approved). | `cursor:ask` |
+
+### Switching Modes
+
+- **Slash command**:
+  - `/cursor-approval` — open an interactive selector showing all modes and the active one
+  - `/cursor-approval auto` (or `/cursor-approval yolo`) — switch to run-everything mode
+  - `/cursor-approval dangerous` — restore default dangerous-command prompting
+  - `/cursor-approval ask` — prompt before every mutating tool call
+  - `/cursor-approval cycle` — cycle to the next mode
+- **Keyboard shortcut**: press **`Ctrl+Alt+A`** to cycle `dangerous → auto → ask → dangerous`.
+  > **Note on `Shift+Tab`**: Pi reserves `Shift+Tab` globally for cycling thinking levels (`app.thinking.cycle`) and blocks extensions from overriding reserved keybindings. `Ctrl+Alt+A` is conflict-free across Linux, macOS, and Windows.
+- **CLI flag / environment variable** (for defaults or headless runs):
+  - `pi --cursor-approval auto ...`
+  - `PI_CURSOR_APPROVAL=auto pi ...`
+
+Mode changes made during a session are persisted in the session branch and automatically restored when resuming or switching branches. Read-only operations (`read`, `grep`, `ls`) are never blocked by approval modes.
 
 ## How It Works
 

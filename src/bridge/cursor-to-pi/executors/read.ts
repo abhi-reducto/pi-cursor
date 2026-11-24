@@ -5,6 +5,8 @@ import type {
 } from "../../../__generated__/agent/v1/read_exec_pb";
 import {
   ReadError,
+  ReadFileNotFound,
+  ReadPermissionDenied,
   ReadRejected,
   ReadResult as ReadResultClass,
   ReadSuccess,
@@ -24,6 +26,22 @@ export function buildReadResultFromToolResult(
 ): ReadResult {
   const text = toolResultToText(result);
   if (result.isError) {
+    if (/\bENOENT\b|no such file|file not found/i.test(text)) {
+      return new ReadResultClass({
+        result: {
+          case: "fileNotFound",
+          value: new ReadFileNotFound({ path }),
+        },
+      });
+    }
+    if (/\bEACCES\b|\bEPERM\b|permission denied/i.test(text)) {
+      return new ReadResultClass({
+        result: {
+          case: "permissionDenied",
+          value: new ReadPermissionDenied({ path }),
+        },
+      });
+    }
     return new ReadResultClass({
       result: {
         case: "error",

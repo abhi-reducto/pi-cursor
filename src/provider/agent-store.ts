@@ -5,6 +5,7 @@ import {
   deleteAgentStore as deleteStore,
   ensureAgentStore as ensureStore,
   persistAgentStore as persistStore,
+  resetAgentStoreInMemory,
 } from "../lib/agent-store";
 import { type AgentStore, fromHex, toHex } from "../vendor/agent-kv";
 import { PI_CURSOR_AGENT_CACHE_DIR } from "./env";
@@ -34,6 +35,11 @@ export const getLastAssistantTimestamp = (
   return lastAssistantTimestampBySession.get(sessionId);
 };
 
+export const resetAgentStore = (sessionId: string): void => {
+  lastAssistantTimestampBySession.delete(sessionId);
+  resetAgentStoreInMemory(sessionId);
+};
+
 const isAgentStoreSnapshot = (value: unknown): value is AgentStoreSnapshot => {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -47,9 +53,15 @@ const isAgentStoreSnapshot = (value: unknown): value is AgentStoreSnapshot => {
   );
 };
 
-const findSnapshot = (entries: SessionEntry[]): AgentStoreSnapshot | null => {
+export const findLatestValidSnapshot = (
+  entries: SessionEntry[],
+): AgentStoreSnapshot | null => {
   for (let i = entries.length - 1; i >= 0; i--) {
     const e = entries[i];
+    // Never restore a pre-compaction Cursor conversation snapshot after compaction.
+    if (e?.type === "compaction") {
+      return null;
+    }
     if (e?.type !== "custom" || e.customType !== CURSOR_STATE_ENTRY_TYPE) {
       continue;
     }
@@ -115,9 +127,9 @@ export const restoreAgentStoreFromBranch = async (
   sessionId: string,
   entries: SessionEntry[],
 ): Promise<void> => {
-  const snapshot = findSnapshot(entries);
+  const snapshot = findLatestValidSnapshot(entries);
   if (!snapshot) {
-    lastAssistantTimestampBySession.delete(sessionId);
+    resetAgentStore(sessionId);
     return;
   }
 

@@ -56,7 +56,13 @@ export class LocalShellStreamExecutor
       return;
     }
 
-    const approved = await confirmIfDangerous(this.ctx.getCtx, args.command);
+    const approved = this.ctx.requestApproval
+      ? await this.ctx.requestApproval({
+          kind: "shell",
+          command: args.command,
+          workingDirectory,
+        })
+      : await confirmIfDangerous(this.ctx.getCtx, args.command);
     if (!approved) {
       yield new ShellStreamClass({
         event: {

@@ -1,4 +1,5 @@
 import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ApprovalAction } from "../../../provider/approval";
 
 export interface PiToolContext {
   readonly cwd: string;
@@ -8,6 +9,7 @@ export interface PiToolContext {
   getChannel?():
     | import("../../../provider/agent-stream-hook").LiveEventChannel
     | null;
+  requestApproval?(action: ApprovalAction): Promise<boolean>;
 }
 
 const TOOL_CALL_ID_MAX_LENGTH = 64;

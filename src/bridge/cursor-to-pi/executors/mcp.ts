@@ -160,6 +160,22 @@ export class LocalMcpExecutor implements Executor<McpArgs, McpResult> {
 
     const piToolArgs = decodeMcpArgs(args.args);
 
+    if (this.ctx.requestApproval) {
+      const approved = await this.ctx.requestApproval({
+        kind: "mcp",
+        toolName,
+        args: piToolArgs,
+      });
+      if (!approved) {
+        return new McpResultClass({
+          result: {
+            case: "error",
+            value: new McpError({ error: "Tool call rejected" }),
+          },
+        });
+      }
+    }
+
     try {
       const piResult = await requestToolExecution(
         this.ctx.getChannel?.() ?? null,

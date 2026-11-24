@@ -114,6 +114,17 @@ export class LocalWriteExecutor implements Executor<WriteArgs, WriteResult> {
       return buildWriteRejectedResult(args.path, "Tool not available");
     }
 
+    if (this.ctx.requestApproval) {
+      const approved = await this.ctx.requestApproval({
+        kind: "write",
+        path: args.path,
+        isBinary: false,
+      });
+      if (!approved) {
+        return buildWriteRejectedResult(args.path, "Write rejected");
+      }
+    }
+
     const content = args.fileText ?? "";
 
     const piResult = await requestToolExecution(
@@ -147,6 +158,17 @@ export class LocalWriteExecutor implements Executor<WriteArgs, WriteResult> {
 
     if (!args.fileBytes || args.fileBytes.length === 0) {
       return buildWriteRejectedResult(args.path, "No file bytes provided");
+    }
+
+    if (this.ctx.requestApproval) {
+      const approved = await this.ctx.requestApproval({
+        kind: "write",
+        path: args.path,
+        isBinary: true,
+      });
+      if (!approved) {
+        return buildWriteRejectedResult(args.path, "Write rejected");
+      }
     }
 
     const base64 = Buffer.from(args.fileBytes).toString("base64");

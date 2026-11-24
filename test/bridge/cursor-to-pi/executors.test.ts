@@ -1,12 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ToolResultMessage } from "@mariozechner/pi-ai";
+import { DeleteArgs } from "../../../src/__generated__/agent/v1/delete_exec_pb.js";
+import { McpArgs } from "../../../src/__generated__/agent/v1/mcp_tool_pb.js";
+import { ShellArgs } from "../../../src/__generated__/agent/v1/shell_exec_pb.js";
+import { WriteArgs } from "../../../src/__generated__/agent/v1/write_exec_pb.js";
+import { LocalDeleteExecutor } from "../../../src/bridge/cursor-to-pi/executors/delete.js";
 import {
   buildMcpResultFromToolResult,
+  LocalMcpExecutor,
   resolveMcpToolName,
 } from "../../../src/bridge/cursor-to-pi/executors/mcp.js";
 import { buildReadResultFromToolResult } from "../../../src/bridge/cursor-to-pi/executors/read.js";
-import { buildScopedShellCommand } from "../../../src/bridge/cursor-to-pi/executors/shell.js";
+import {
+  buildScopedShellCommand,
+  LocalShellExecutor,
+} from "../../../src/bridge/cursor-to-pi/executors/shell.js";
+import { LocalWriteExecutor } from "../../../src/bridge/cursor-to-pi/executors/write.js";
+import type { PiToolContext } from "../../../src/bridge/cursor-to-pi/local-resource-provider/types.js";
 
 test("resolveMcpToolName handles toolName and provider-prefixed name", () => {
   assert.equal(
@@ -88,4 +99,73 @@ test("buildScopedShellCommand scopes workingDirectory when different from cwd", 
     buildScopedShellCommand("ls || true", "/tmp/sub dir", "/home/user/repo"),
     "cd '/tmp/sub dir' && {\nls || true\n}",
   );
+});
+
+test("buildReadResultFromToolResult maps ENOENT and EACCES to typed ReadResult cases", () => {
+  const notFound = buildReadResultFromToolResult("/tmp/missing.ts", {
+    role: "toolResult",
+    toolCallId: "r2",
+    toolName: "read",
+    content: [
+      {
+        type: "text",
+        text: "ENOENT: no such file or directory, access '/tmp/missing.ts'",
+      },
+    ],
+    isError: true,
+    timestamp: 1,
+  });
+  assert.equal(notFound.result.case, "fileNotFound");
+
+  const denied = buildReadResultFromToolResult("/tmp/secret.ts", {
+    role: "toolResult",
+    toolCallId: "r3",
+    toolName: "read",
+    content: [{ type: "text", text: "EACCES: permission denied" }],
+    isError: true,
+    timestamp: 1,
+  });
+  assert.equal(denied.result.case, "permissionDenied");
+});
+
+test("executors honor requestApproval rejection for shell, write, delete, and mcp", async () => {
+  const deniedActions: string[] = [];
+  const ctx: PiToolContext = {
+    cwd: "/tmp",
+    getActiveTools: () => new Set(["bash", "write", "codemode"]),
+    getCtx: () => null,
+    requestApproval: async (action) => {
+      deniedActions.push(action.kind);
+      return false;
+    },
+  };
+
+  const shellRes = await new LocalShellExecutor(ctx).execute(
+    null,
+    new ShellArgs({ command: "echo hi", toolCallId: "s1" }),
+  );
+  assert.equal(shellRes.result.case, "rejected");
+
+  const writeRes = await new LocalWriteExecutor(ctx).execute(
+    null,
+    new WriteArgs({ path: "a.ts", fileText: "hi", toolCallId: "w1" }),
+  );
+  assert.equal(writeRes.result.case, "rejected");
+
+  const deleteRes = await new LocalDeleteExecutor(ctx).execute(
+    null,
+    new DeleteArgs({ path: "a.ts", toolCallId: "d1" }),
+  );
+  assert.equal(deleteRes.result.case, "rejected");
+
+  const mcpRes = await new LocalMcpExecutor(ctx).execute(
+    null,
+    new McpArgs({ toolName: "codemode", toolCallId: "m1" }),
+  );
+  assert.equal(mcpRes.result.case, "error");
+  if (mcpRes.result.case === "error") {
+    assert.match(mcpRes.result.value.error, /rejected/i);
+  }
+
+  assert.deepEqual(deniedActions, ["shell", "write", "delete", "mcp"]);
 });

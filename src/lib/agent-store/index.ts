@@ -75,6 +75,20 @@ export const deleteAgentStore = (sessionId: string): boolean => {
   return sessionStores.delete(sessionId);
 };
 
+/**
+ * Reset the in-memory store for `sessionId` to a clean empty conversation state
+ * without deleting blobs on disk (so other `/tree` branches remain intact) and
+ * without reloading stale `meta.json` on the next `ensureAgentStore` call.
+ */
+export const resetAgentStoreInMemory = (sessionId: string): void => {
+  const existing = sessionStores.get(sessionId);
+  const blobs = existing?.jsonStore.blobs ?? new Map<string, Uint8Array>();
+  const metadata = getDefaultAgentMetadata();
+  const jsonStore = new JsonBlobStoreWithMetadata(blobs, metadata);
+  const store = new AgentStore(jsonStore, jsonStore);
+  sessionStores.set(sessionId, { store, jsonStore });
+};
+
 export const hasAgentStore = (sessionId: string): boolean => {
   return sessionStores.has(sessionId);
 };

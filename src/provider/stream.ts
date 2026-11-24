@@ -61,6 +61,7 @@ import {
   type LiveSession,
   setLiveSession,
 } from "./agent-stream-hook";
+import type { ApprovalAction } from "./approval";
 import { toCursorId } from "./model-mapping";
 import { type CursorStateStore, createOverlayState } from "./state";
 import { applyUsageAndCost, type CursorTokenDetails } from "./usage";
@@ -352,11 +353,14 @@ export function streamCursorAgent(
   model: Model<Api>,
   context: Context,
   options?: SimpleStreamOptions,
+  requestApproval?: (action: ApprovalAction) => Promise<boolean>,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
 
   (async () => {
-    const sessionId = options?.sessionId ?? "default";
+    const isEphemeral = !options?.sessionId;
+    const sessionId = options?.sessionId ?? `ephemeral-${crypto.randomUUID()}`;
+    const effectiveState = isEphemeral ? createOverlayState(state) : state;
 
     const output: CursorAssistantMessage = {
       role: "assistant",
@@ -378,7 +382,7 @@ export function streamCursorAgent(
     let session: LiveSession | undefined;
 
     try {
-      session = getLiveSession(sessionId);
+      session = isEphemeral ? undefined : getLiveSession(sessionId);
 
       if (!session) {
         const apiKey = options?.apiKey;
@@ -404,6 +408,7 @@ export function streamCursorAgent(
           getActiveTools: () => new Set(pi.getActiveTools()),
           getCtx,
           getChannel: () => channel,
+          ...(requestApproval ? { requestApproval } : {}),
         };
 
         const piSystemState = extractPiSystemState(context);
@@ -420,15 +425,18 @@ export function streamCursorAgent(
 
         const blobStore = agentStore.getBlobStore();
         const cursorModelId = toCursorId(model.id, options?.reasoning);
-        const overlayState = createOverlayState(state);
-        const expectedLastAssistantTimestamp =
-          getLastAssistantTimestamp(sessionId);
+        const overlayState = createOverlayState(effectiveState);
+        const expectedLastAssistantTimestamp = isEphemeral
+          ? undefined
+          : getLastAssistantTimestamp(sessionId);
         const { initialRequest, conversationState } = await buildRunRequest({
           model: { ...model, id: cursorModelId },
           context,
           conversationId: agentStore.getId(),
           blobStore,
-          conversationState: agentStore.getConversationStateStructure(),
+          conversationState: isEphemeral
+            ? undefined
+            : agentStore.getConversationStateStructure(),
           mcpToolDefinitions: requestContextTools,
           state: overlayState,
           systemPromptOverride: piContext.cleanedPrompt,
@@ -442,6 +450,9 @@ export function streamCursorAgent(
         let lastFlushedAssistantTimestamp: number | undefined;
         const flushSessionState = async (lastAssistantTimestamp?: number) => {
           await pendingCheckpoint;
+          if (isEphemeral) {
+            return;
+          }
           if (lastAssistantTimestamp !== undefined) {
             setLastAssistantTimestamp(sessionId, lastAssistantTimestamp);
           }
@@ -496,7 +507,15 @@ export function streamCursorAgent(
         const interactionListener = createInteractionListenerAdapter(
           handleInteractionUpdate,
         );
-        let latestTokenDetails: CursorTokenDetails | undefined;
+        let latestTokenDetails: CursorTokenDetails | undefined =
+          conversationState.tokenDetails &&
+          (conversationState.tokenDetails.usedTokens > 0 ||
+            conversationState.tokenDetails.maxTokens > 0)
+            ? {
+                usedTokens: conversationState.tokenDetails.usedTokens,
+                maxTokens: conversationState.tokenDetails.maxTokens,
+              }
+            : undefined;
         let pendingCheckpoint: Promise<void> = Promise.resolve();
         const checkpointHandler = createCheckpointHandler(
           (checkpoint: ConversationStateStructure) => {
@@ -554,7 +573,9 @@ export function streamCursorAgent(
           },
           startTime: Date.now(),
         };
-        setLiveSession(sessionId, session);
+        if (!isEphemeral) {
+          setLiveSession(sessionId, session);
+        }
       }
 
       if (!session) {
@@ -599,17 +620,19 @@ export function streamCursorAgent(
       };
 
       if (result.reason === "toolUse" && result.tools.length > 0) {
-        emitToolCalls(result.tools, output, stream, state);
+        emitToolCalls(result.tools, output, stream, effectiveState);
         output.stopReason = "toolUse";
-        syncModelUsage();
 
-        state.rememberAssistantContent({
-          timestamp: output.timestamp,
-          blocks: serializeContentBlocks(output.content),
-        });
+        if (!isEphemeral) {
+          effectiveState.rememberAssistantContent({
+            timestamp: output.timestamp,
+            blocks: serializeContentBlocks(output.content),
+          });
+        }
         try {
           await session.flushSessionState(output.timestamp);
         } catch {}
+        syncModelUsage();
 
         stream.push({
           type: "done",
@@ -619,19 +642,23 @@ export function streamCursorAgent(
       } else {
         output.stopReason = "stop";
 
-        state.rememberAssistantContent({
-          timestamp: output.timestamp,
-          blocks: serializeContentBlocks(output.content),
-        });
-        deleteLiveSession(sessionId);
+        if (!isEphemeral) {
+          effectiveState.rememberAssistantContent({
+            timestamp: output.timestamp,
+            blocks: serializeContentBlocks(output.content),
+          });
+          deleteLiveSession(sessionId);
+        }
         await session.cursorRunPromise.catch(() => {});
         let flushed = false;
         try {
           await session.flushSessionState(output.timestamp);
-          flushed = true;
+          flushed = !isEphemeral;
         } catch {}
         syncModelUsage();
-        await evictAgentStore(sessionId, { persist: !flushed }).catch(() => {});
+        await evictAgentStore(sessionId, {
+          persist: !isEphemeral && !flushed,
+        }).catch(() => {});
         stream.push({ type: "done", reason: "stop", message: output });
       }
       stream.end();
@@ -643,16 +670,20 @@ export function streamCursorAgent(
       try {
         if (session) {
           await session.flushSessionState();
-          flushed = true;
+          flushed = !isEphemeral;
           await session.cursorRunPromise.catch(() => {});
         }
       } catch {}
-      deleteLiveSession(sessionId);
+      if (!isEphemeral) {
+        deleteLiveSession(sessionId);
+      }
       rejectPendingForSession(
         sessionId,
         `Stream error: ${output.errorMessage}`,
       );
-      await evictAgentStore(sessionId, { persist: !flushed }).catch(() => {});
+      await evictAgentStore(sessionId, {
+        persist: !isEphemeral && !flushed,
+      }).catch(() => {});
       stream.push({
         type: "error",
         reason: output.stopReason === "aborted" ? "aborted" : "error",

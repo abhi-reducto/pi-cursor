@@ -63,6 +63,16 @@ export class LocalDeleteExecutor implements Executor<DeleteArgs, DeleteResult> {
       return buildDeleteRejectedResult(args.path, "Tool not available");
     }
 
+    if (this.ctx.requestApproval) {
+      const approved = await this.ctx.requestApproval({
+        kind: "delete",
+        path: args.path,
+      });
+      if (!approved) {
+        return buildDeleteRejectedResult(args.path, "Delete rejected");
+      }
+    }
+
     // Delete via bash rm — pi doesn't have a delete tool
     const piResult = await requestToolExecution(
       this.ctx.getChannel?.() ?? null,
